@@ -1,0 +1,17 @@
+# Ignore the virtual environment folder
+venv/
+
+# macOS system files
+.DS_Store
+
+# VS Code settings (optional but recommended)
+.vscode/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter notebook checkpoints (if used)
+.ipynb_checkpoints/
