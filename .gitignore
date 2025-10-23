@@ -17,3 +17,6 @@ __pycache__/
 .ipynb_checkpoints/model/review_classifier.pkl
 models/*.pkl
 *.pkl
+model/*.pkl
+models/*.pkl
+*.pkl
