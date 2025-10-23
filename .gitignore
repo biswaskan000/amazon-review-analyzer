@@ -14,4 +14,6 @@ __pycache__/
 *.pyd
 
 # Jupyter notebook checkpoints (if used)
-.ipynb_checkpoints/
+.ipynb_checkpoints/model/review_classifier.pkl
+models/*.pkl
+*.pkl
