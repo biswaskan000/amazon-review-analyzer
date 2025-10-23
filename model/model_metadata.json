@@ -1,0 +1,6 @@
+{
+    "num_samples": 36389,
+    "training_samples": 29111,
+    "test_samples": 7278,
+    "auc_score": 0.9279536774354129
+}
