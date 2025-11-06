@@ -90,5 +90,8 @@ print(f"✅ Best Cross-Validation Accuracy: {grid_search.best_score_:.4f}")
 # --------------------------------------
 os.makedirs("models", exist_ok=True)
 model_path = "models/fine_tuned_xgb.pkl"
-joblib.dump(grid_search.best_estimator_, model_path)
+# Save the best estimator found by GridSearchCV
+best_model = grid_search.best_estimator_
+joblib.dump(best_model, model_path)
+
 print(f"\n💾 Fine-tuned model saved to {model_path}")
