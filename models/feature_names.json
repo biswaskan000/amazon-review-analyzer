@@ -1,0 +1,11 @@
+[
+    "rating",
+    "label",
+    "char_length",
+    "word_count",
+    "punctuation_ct",
+    "is_extreme_star",
+    "VERB",
+    "ADV",
+    "NOUN"
+]
