@@ -45,6 +45,7 @@ def get_xgb_model():
     if not model_path.exists():
         st.error(f"Model file not found at {model_path}")
         return None
+    
     model = joblib.load(model_path)
     return {"best_model": model}
 
@@ -138,6 +139,7 @@ def main():
         if analyze_button:
             if input_review.strip():
                 dataset_category = CATEGORY_MAPPING[category]
+
                 with st.spinner("Analyzing..."):
                     try:
                         label, confidence, _ = xgb_predict(input_review, model_dict, dataset_category, rating)
