@@ -1,10 +1,14 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import os
 import string
 import json
 import nltk
 import spacy
+import requests
+import shutil
+import tempfile
 from pathlib import Path
 from nltk.sentiment import SentimentIntensityAnalyzer
 
@@ -40,14 +44,51 @@ def get_nlp_models():
 @st.cache_resource
 def get_xgb_model():
     """Load the trained XGBoost model."""
-    model_path = Path("../models/fine_tuned_xgb.pkl")
+    # Resolve model path relative to this file so it works both locally and when
+    # Streamlit changes the working directory in deployment environments.
+    model_path = Path(__file__).resolve().parent / "models" / "fine_tuned_xgb.pkl"
 
+    # If the model file is missing, try to download it from an external URL
+    # provided through the MODEL_URL environment variable. This is useful for
+    # deployment platforms that don't fetch Git LFS objects automatically.
     if not model_path.exists():
-        st.error(f"Model file not found at {model_path}")
+        model_url = os.environ.get("MODEL_URL")
+        if not model_url:
+            st.error(f"Model file not found at {model_path}")
+            st.error("Set the MODEL_URL environment variable to an externally hosted model to enable automatic download.")
+            return None
+
+        # Ensure models directory exists
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with st.spinner("Downloading model from MODEL_URL..."):
+                resp = requests.get(model_url, stream=True, timeout=60)
+                resp.raise_for_status()
+
+                total = resp.headers.get("content-length")
+                if total is not None:
+                    total = int(total)
+
+                # Write to a temporary file then move into place
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    downloaded = 0
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            tmp.write(chunk)
+                            downloaded += len(chunk)
+                shutil.move(tmp.name, str(model_path))
+                st.success(f"Downloaded model to {model_path}")
+        except Exception as e:
+            st.error(f"Failed to download model from MODEL_URL: {e}")
+            return None
+
+    try:
+        model = joblib.load(model_path)
+        return {"best_model": model}
+    except Exception as e:
+        st.error(f"Failed to load model at {model_path}: {e}")
         return None
-    
-    model = joblib.load(model_path)
-    return {"best_model": model}
 
 # ----------------------------
 # 2. Feature Extraction
@@ -76,13 +117,27 @@ def extract_features(text, rating=5.0):
     return df
 
 
-def prepare_features_for_prediction(text, category="unknown", rating=5.0):
-    """Prepare features and align with training data columns."""
+def prepare_features_for_prediction(text, category="unknown", rating=5.0, feature_names=None):
+    """Prepare features and align with training data columns.
+
+    If `feature_names` is provided (list of expected columns), use that. If not,
+    fall back to the scripts/xgb_model/feature_names.json file. Any missing
+    columns will be created with default 0.0 values.
+    """
     df = extract_features(text, rating)
 
-    # Load expected feature names
-    with open("../scripts/xgb_model/feature_names.json", "r") as f:
-        feature_data = json.load(f)
+    # Determine expected feature names
+    if feature_names is not None:
+        feature_data = list(feature_names)
+    else:
+        repo_root = Path(__file__).resolve().parent.parent
+        feature_file = repo_root / "scripts" / "xgb_model" / "feature_names.json"
+        if not feature_file.exists():
+            st.error(f"Feature names file not found at {feature_file}")
+            feature_data = list(df.columns)
+        else:
+            with open(feature_file, "r") as f:
+                feature_data = json.load(f)
 
     # Add category columns
     for cat in CATEGORY_MAPPING.values():
@@ -91,16 +146,33 @@ def prepare_features_for_prediction(text, category="unknown", rating=5.0):
     # Ensure all expected columns exist
     for feat in feature_data:
         if feat not in df.columns:
-            df[feat] = 0.0
+            # For text token features, derive count from cleaned text if possible
+            if isinstance(feat, str) and feat.isalpha():
+                # simple token count (case-insensitive)
+                df[feat] = df["cleaned_text"].apply(lambda s: s.split().count(feat))
+            else:
+                df[feat] = 0.0
 
-    df = df[feature_data]  # Match training order
-    return df
+    # Return columns in expected order
+    return df[feature_data]
 
 
 def xgb_predict(text, model_dict, category="unknown", rating=5.0):
     """Make prediction using XGBoost model."""
-    features = prepare_features_for_prediction(text, category, rating)
     model = model_dict["best_model"]
+
+    # Try to get the feature names from the model (preferred). Fall back to
+    # the scripts file within prepare_features_for_prediction if not available.
+    feature_names = None
+    try:
+        booster = model.get_booster()
+        if hasattr(booster, "feature_names") and booster.feature_names is not None:
+            feature_names = booster.feature_names
+    except Exception:
+        feature_names = None
+
+    features = prepare_features_for_prediction(text, category, rating, feature_names)
+
     prediction = model.predict(features)[0]
     probabilities = model.predict_proba(features)[0]
     confidence = probabilities[prediction]
