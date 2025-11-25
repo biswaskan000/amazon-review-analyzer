@@ -42,6 +42,28 @@ def get_nlp_models():
 
 
 @st.cache_resource
+def get_text_vectorizer():
+    """Try to load a saved TF-IDF/vectorizer used at training time.
+
+    Looks in common locations under the repo (scripts/xgb_model and model/).
+    Returns the loaded vectorizer or None if not found.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    candidates = [
+        repo_root / "scripts" / "xgb_model" / "tfidf_vectorizer.pkl",
+        repo_root / "scripts" / "xgb_model" / "vectorizer.pkl",
+        repo_root / "model" / "tfidf_vectorizer.pkl",
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                return joblib.load(p)
+            except Exception:
+                continue
+    return None
+
+
+@st.cache_resource
 def get_xgb_model():
     """Load the trained XGBoost model."""
     # Resolve model path relative to this file so it works both locally and when
@@ -139,22 +161,54 @@ def prepare_features_for_prediction(text, category="unknown", rating=5.0, featur
             with open(feature_file, "r") as f:
                 feature_data = json.load(f)
 
+    # Load text vectorizer (if available) so we can recreate bag-of-words / TF-IDF
+    # features exactly like training.
+    vectorizer = get_text_vectorizer()
+
+    token_df = pd.DataFrame()
+    if vectorizer is not None:
+        try:
+            vec = vectorizer.transform([df["cleaned_text"].iloc[0]])
+            # scikit-learn >=1.0 has get_feature_names_out
+            try:
+                token_cols = list(vectorizer.get_feature_names_out())
+            except Exception:
+                # fall back to vocabulary keys
+                token_cols = [k for k, _ in sorted(vectorizer.vocabulary_.items(), key=lambda x: x[1])]
+
+            token_arr = vec.toarray()
+            token_df = pd.DataFrame(token_arr, columns=token_cols)
+            # Prevent name collisions between token features and engineered
+            # feature columns (e.g. a token named 'rating' would clash with
+            # the engineered 'rating' column). Prefix token columns so the
+            # combined DataFrame has unique, scalar-valued columns.
+            token_df.columns = [f"tok_{c}" for c in token_df.columns]
+        except Exception:
+            token_df = pd.DataFrame()
+    else:
+        # If no vectorizer, we can still create simple token counts for the
+        # vocabulary in feature_data (fallback behavior)
+        token_cols = [f for f in feature_data if isinstance(f, str) and f.isalpha()]
+        token_df = pd.DataFrame([{c: df["cleaned_text"].split().count(c) for c in token_cols}])
+        # Prefix fallback token columns as well to avoid accidental
+        # collisions with engineered feature names.
+        token_df.columns = [f"tok_{c}" for c in token_df.columns]
+
+    # Combine engineered features with token features
+    engineered = df.drop(columns=["cleaned_text"]) if "cleaned_text" in df.columns else df
+    combined = pd.concat([engineered.reset_index(drop=True), token_df.reset_index(drop=True)], axis=1)
+
     # Add category columns
     for cat in CATEGORY_MAPPING.values():
-        df[cat] = 1 if cat == category else 0
+        combined[cat] = 1 if cat == category else 0
 
-    # Ensure all expected columns exist
+    # Ensure all expected columns exist; fill missing with 0.0
     for feat in feature_data:
-        if feat not in df.columns:
-            # For text token features, derive count from cleaned text if possible
-            if isinstance(feat, str) and feat.isalpha():
-                # simple token count (case-insensitive)
-                df[feat] = df["cleaned_text"].apply(lambda s: s.split().count(feat))
-            else:
-                df[feat] = 0.0
+        if feat not in combined.columns:
+            combined[feat] = 0.0
 
     # Return columns in expected order
-    return df[feature_data]
+    return combined[feature_data]
 
 
 def xgb_predict(text, model_dict, category="unknown", rating=5.0):
