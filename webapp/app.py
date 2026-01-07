@@ -35,8 +35,25 @@ def get_nlp_models():
         nltk.data.find("sentiment/vader_lexicon.zip")
     except LookupError:
         nltk.download("vader_lexicon", quiet=True)
+    # Try to load the small English model. If it's not installed in the
+    # environment (common on fresh deploys), attempt to download it once.
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+    except Exception as e:
+        # Attempt to download the model at runtime. This requires network
+        # access and may take a few seconds on first run. If download fails,
+        # re-raise the original error so the app can surface it.
+        try:
+            import spacy.cli
+            spacy.cli.download("en_core_web_sm")
+            nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+        except Exception:
+            # Give a clearer error message to the app logs before re-raising.
+            raise RuntimeError(
+                "spaCy language model 'en_core_web_sm' is not installed and automatic download failed.\n"
+                "In deployment, either add the model to your environment or allow the app to download it (ensure internet access)."
+            )
 
-    nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
     analyzer = SentimentIntensityAnalyzer()
     return nlp, analyzer
 
